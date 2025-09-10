@@ -17,7 +17,9 @@
     get_value/2, 
     set_value/2, 
     clear_all/0,
-    session_id/0
+    session_id/0,
+    orig_session_id/0,
+    clear_session/1
 ]).
 
 -callback init(         handler_config(),
@@ -37,6 +39,12 @@
 -callback session_id(   handler_config(),
                         handler_state()) -> {ok, Sessionid:: term(), handler_state()}.
 
+-callback orig_session_id( handler_config(),
+                           handler_state()) -> {ok, Sessionid:: term(), handler_state()}.
+
+-callback clear_session(   SessionId :: term(),
+                           handler_config(),
+                           handler_state()) -> {ok, handler_state()}.
 
 % get(Key, DefaultValue, State, Key, DefaultValue) -> {ok, Value, NewState}.
 % Retrieve a value from the storage area.
@@ -65,3 +73,9 @@ clear_all() ->
 session_id() ->
     {ok, SessionId} = wf_handler:call(session_handler, session_id),
     SessionId.
+
+orig_session_id() -> wf_handler:call(session_handler, orig_session_id).
+
+clear_session(SessionId) -> wf_handler:call(session_handler, clear_session, [SessionId]).
+
+

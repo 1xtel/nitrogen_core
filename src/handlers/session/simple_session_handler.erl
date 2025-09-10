@@ -18,17 +18,25 @@
     get_value/4, 
     set_value/4, 
     clear_all/2,
-    session_id/2
+    orig_session_id/2,
+    session_id/2,
+    clear_session/3
 ]).
--record (state, {unique, node}).
+-record (state, {unique, node, ip_address, user_agent}).
 
-init(_Config, _State) -> 
-    % Get the session cookie and node...
-    Cookie = wf:cookie(get_cookie_name()),
+init(_Config, _State) ->
+    Cookie    = wf:cookie(get_cookie_name()),
+    ClientIp  = wf:header("x-real-ip"),
+    UserAgent = wf:header("user-agent"),
     State = case wf:depickle(Cookie) of
-        undefined -> new_state();
-        Other=#state{} -> Other;
-        _ -> new_state()
+        undefined -> new_state(ClientIp, UserAgent);
+        Other=#state{ip_address=StoredIp, user_agent=StoredAgent} ->
+            case {StoredIp == ClientIp, StoredAgent == UserAgent} of
+               {true,true} -> Other;
+               _           ->
+                 new_state(ClientIp, UserAgent)
+            end;
+        _ -> new_state(ClientIp, UserAgent)
     end,
     {ok, State}.
 
@@ -38,34 +46,46 @@ finish(_Config, State) ->
     Opts = [
         {path, "/"},
         {minutes_to_live, Timeout},
-        {http_only, true}
+        {http_only, true},
+        {secure, true}
     ],
     ok = wf:cookie(get_cookie_name(), wf:pickle(State), Opts),
     {ok, []}.
 
-get_value(Key, DefaultValue, Config, State) -> 
+get_value(Key, DefaultValue, Config, State) ->
     {ok, Pid} = get_session_pid(Config, State),
     Ref = make_ref(),
     Pid!{get_value, Key, self(), Ref},
-    Value = receive 
+    Value = receive
         {ok, undefined, Ref} -> DefaultValue;
         {ok, Other, Ref} -> Other
     end,
     {ok, Value, State}.
 
-set_value(Key, Value, Config, State) -> 
+set_value(Key, Value, Config, State) ->
     {ok, Pid} = get_session_pid(Config, State),
     Ref = make_ref(),
     Pid!{set_value, Key, Value, self(), Ref},
-    receive {ok, OldValue, Ref} -> ok end,	
+    receive {ok, OldValue, Ref} -> ok end,      
     {ok, OldValue, State}.
 
-clear_all(Config, State) -> 
+clear_all(Config, State) ->
     {ok, Pid} = get_session_pid(Config, State),
     Ref = make_ref(),
     Pid!{clear_all, self(), Ref},
-    receive {ok, Ref} -> ok end,	
+    receive {ok, Ref} -> ok end,        
     {ok, State}.
+
+clear_session(SessionId, _Config, State) ->
+    {ok, Pid} = get_session_pid(SessionId),
+    Ref = make_ref(),
+    Pid!{clear_all, self(), Ref},
+    receive {ok, Ref} -> ok end,
+    {ok, State}.
+
+
+orig_session_id(_Config, State)->
+    {ok, State#state.unique, State}.
 
 session_id(_Config, State) ->
     {ok, SessionId} = wf:hex_encode (State#state.unique),
@@ -80,6 +100,12 @@ get_session_pid(_Config, State) ->
     Timeout = wf:config_default(session_timeout, 20),
     F = fun() -> session_loop([], Timeout) end,
     SessionTag = {session, State#state.unique},
+    {ok, _Pid} = process_registry_handler:get_pid(SessionTag, F).
+
+get_session_pid(SessionId) ->
+    Timeout = wf:config_default(session_timeout, 20),
+    F = fun() -> session_loop([], Timeout) end,
+    SessionTag = {session, SessionId},
     {ok, _Pid} = process_registry_handler:get_pid(SessionTag, F).
 
 session_loop(Session, Timeout) ->
@@ -104,16 +130,16 @@ session_loop(Session, Timeout) ->
             end,
             Session1 = lists:keystore(Key, 1, Session, {Key, Value}),
             Pid!{ok, OldValue, Ref},
-            session_loop(Session1, Timeout);			
+            session_loop(Session1, Timeout);
 
         {clear_all, Pid, Ref} ->
             Pid!{ok, Ref},
-            session_loop([], Timeout)	
+            session_loop([], Timeout)   
 
-    after TimeoutMS -> 
+    after TimeoutMS ->
         exit(timed_out)
     end.
 
-new_state() ->
+new_state(Ip, Agent) ->
     Unique = erlang:md5(term_to_binary({os:timestamp(), erlang:make_ref()})),
-    #state { unique=Unique }.
+    #state { unique=Unique, ip_address=Ip, user_agent=Agent}.
