@@ -46,8 +46,7 @@ finish(_Config, State) ->
     Opts = [
         {path, "/"},
         {minutes_to_live, Timeout},
-        {http_only, true},
-        {secure, true}
+        {http_only, true}
     ],
     ok = wf:cookie(get_cookie_name(), wf:pickle(State), Opts),
     {ok, []}.
